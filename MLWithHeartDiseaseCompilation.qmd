@@ -1,0 +1,385 @@
+---
+title: "Predicting Heart Disease with Machine Learning"
+author: "Tony DiRubbo"
+format: html
+editor: visual
+---
+
+## Introduction
+
+![](images/Coronary-disease-illustration-1200x982.jpg)Heart disease can pertain to a range of conditions that affect the heart and its purpose of pumping blood throughout the body. Generally, heart disease is diagnosed when direct blood flow to the heart, before it is pumped by the heart to the rest of the body, is compromised. Since the 1950's heart disease has been the leading cause of death in America. The Center for Disease Control (CDC) estimates that one person dies of heart disease around every 33 seconds.
+
+The UC Irvine Machine Learning Repository has provided access to four databases. Two in America, a Cleveland hospital and the VA in Long Beach, California, as well as hospitals in Hungary and Switzerland. The four databases can be combined imported in Python, then combined using SQL to make one complete dataset. The dataset has hundreds of observations and 14 variables. For each patient: age, sex, cerebral palsy, resting blood pressure, cholesterol, fasting blood sugar above 120mg/dl , resting cardiography measurement, maximum heart rate, exercised induced angina, presence of ST depression, heart rate slope, number of blood vessels colored in a fluoroscopy, thalassemia diagnoses, as well as if the doctors at each corresponding hospital diagnosed the patient with heart disease.
+
+The dataset can be found at: https://archive.ics.uci.edu/dataset/45/heart+disease
+
+The following are the required packages for the entire analyses:
+
+```{r}
+#| results: hide
+#| warning: false
+set.seed(081302)
+library(caret) #for knn, trees, regression, ANN
+library(caretEnsemble) # for regression
+library(dplyr) #for cleaning data
+library(earth) # for regression
+library(ggcorrplot) # for plotting
+library(ggplot2) #for plotting
+library(glmnet) #for regression
+library(gridExtra)#for regression
+library(kernlab) # for regression
+library(mlbench) #for trees, regression
+library(neuralnet) # for ANN
+library(party) #for trees
+library(partykit) #for trees
+library(pROC) #for knn
+library(randomForest) #for regression
+library(readr) #for reading data
+library(reticulate) #for python support
+library(rpart) # for regression
+library(skimr) #for examining data
+```
+
+## Feature Engineering of Data
+
+For simplifying conclusions, the heart disease diagnoses will be binned so that a patient is either diagnosed with heart disease or not (two options). Variables will be renamed so that they are easier to interpret in code.
+
+```{python}
+#Install the ucimlrepo package
+#pip install "ucimlrepo""
+
+#from ucimlrepo import fetch_ucirepo 
+  
+# fetch dataset 
+#heart_disease = fetch_ucirepo(id=45) 
+  
+# data (as pandas dataframes) 
+#X = heart_disease.data.features 
+#y = heart_disease.data.targets 
+  
+# metadata 
+#print(heart_disease.metadata) 
+  
+# variable information 
+#print(heart_disease.variables) 
+
+#heart_disease.to_csv('heart_disease_uci.csv', index=False
+```
+
+
+```{r}
+#| results: hide
+#| warning: false
+HDdf <- read_csv("heart_disease_uci.csv") #reading in the CSV
+
+#Updates data so that heart disease diagnoses is a two factor variable
+HDdf <- within(HDdf,{num<-factor(num, labels = c("No","Yes","Yes","Yes","Yes"))}) 
+
+#renaming variables so that they are easier to understand at a quick glance
+names(HDdf)[names(HDdf) == "cp"] <- "CerebralPalsy"
+names(HDdf)[names(HDdf) == "chol"] <- "Cholestoral"
+names(HDdf)[names(HDdf) == "fbs"] <- "FastingBloodSugar"
+names(HDdf)[names(HDdf) == "restecg"] <- "RestingECGReading"
+names(HDdf)[names(HDdf) == "exang"] <- "ExercisedAngina"
+names(HDdf)[names(HDdf) == "trestbps"] <- "RestingBPS"
+names(HDdf)[names(HDdf) == "thalch"] <- "MaxHeartRate"
+names(HDdf)[names(HDdf) == "oldpeak"] <- "STDepression"
+names(HDdf)[names(HDdf) == "slope"] <- "STSlope"
+names(HDdf)[names(HDdf) == "ca"] <- "FluoroscopyColoredVessels"
+names(HDdf)[names(HDdf) == "thal"] <- "ThalassemiaDiagnoses"
+names(HDdf)[names(HDdf) == "num"] <- "HeartDisease"
+
+#saves data as a data frame
+HDdf <- as.data.frame(HDdf)
+```
+
+Basic summary statistics can be conducted to gather a better understanding of the dataset.
+
+```{r}
+skim(HDdf)
+```
+
+There are 920 observations among the 14 variables. Five of the variables are classified as characters: sex, cerebral palsy diagnoses, resting ecg reading, ST slope, and Thalassemia diagnoses. The resulting heart disease diagnosis is identified as a factor variable. Fasting Blood Sugar levels above 120 mg/dl and exercised induced Angina are true and false variables. Finally, age, resting heart rate, cholesterol, maximum heart rate, ST Depression scores, and colored vessels on a fluoroscopy are all numeric variables. For all missing observations for each dataset, the median value for those variables will be inputted so that further analyses can be conducted later, without decreasing the total number of observations.
+
+```{r}
+HDdf <- HDdf %>%
+  mutate(age = ifelse(is.na(age), median(age, na.rm=TRUE), age),
+         RestingBPS = ifelse(is.na(RestingBPS), median(RestingBPS, na.rm=TRUE), RestingBPS),
+         Cholestoral = ifelse(is.na(Cholestoral), median(Cholestoral, na.rm=TRUE), Cholestoral),
+         MaxHeartRate = ifelse(is.na(MaxHeartRate), median(MaxHeartRate, na.rm=TRUE), MaxHeartRate),
+         STDepression = ifelse(is.na(STDepression), median(STDepression, na.rm=TRUE), STDepression),
+         FluoroscopyColoredVessels = ifelse(is.na(FluoroscopyColoredVessels), median(FluoroscopyColoredVessels, na.rm=TRUE), FluoroscopyColoredVessels))
+```
+
+The data frame will additionally be divided into various sections so that only the numerical and classification values can be analyzed independent from one another if deemed fit. Able variables will be turned into dummy variables so that they can be implemented into the regression analysis later on.
+
+```{r}
+#NumericVariablesOnly
+HDn <- select(HDdf, c("age","RestingBPS","Cholestoral","MaxHeartRate","STDepression","FluoroscopyColoredVessels","HeartDisease"))
+
+#RegressionVariables
+HDreg <- select(HDdf, c("HeartDisease","age","RestingBPS","Cholestoral","MaxHeartRate","STDepression","FluoroscopyColoredVessels","sex","FastingBloodSugar","RestingECGReading","ExercisedAngina","ThalassemiaDiagnoses"))
+
+#Creating Dummy Variables for Regression (HDreg2)
+#ifelse(test_expression, x, y)
+HDreg$HeartDisease<-ifelse(HDreg$HeartDisease == "Yes",1.0,0)
+names(HDreg)[names(HDreg) == "sex"] <- "Male"
+HDreg$Male<-ifelse(HDreg$Male == "Male",1,0)
+HDreg$FastingBloodSugar<-ifelse(HDreg$FastingBloodSugar == TRUE,1,0)
+names(HDreg)[names(HDreg) == "RestingECGReading"] <- "Hypertrophy"
+HDreg$Hypertrophy<-ifelse(HDreg$Hypertrophy == "normal",0,1)
+HDreg$ExercisedAngina<-ifelse(HDreg$ExercisedAngina == TRUE,1,0)
+HDreg$ThalassemiaDiagnoses<-ifelse(HDreg$ThalassemiaDiagnoses == "normal",0,1)
+
+# Impute missing values with mean column-wise
+for (col in names(HDreg)) {
+  HDreg[is.na(HDreg[, col]), col] <- mean(HDreg[, col], na.rm = TRUE)
+}
+```
+
+## Reminder of Research Conjecture
+
+After examining the data frame and conducting initial cleaning, two research questions have arisen. The first question is a classification research question which asks presence of heart disease within patients based on these recorded variables and risk factors can be predicted. From the numeric variables, regression research questions can also be asked.
+
+The planned regression research question will attempt to predict the percent chance an individual develops heart disease using the dummy variable of heart disease, and all other potential numeric/dummy variables in the data frame as independent variables. Multiple regression models will be developed at first, before the best model is selected and further analyzed.
+
+## Classification with Trees
+
+Starting off with the classification question of predicting heart disease based on a variety of numerical factors, the conditional tree algorithm is a strong initial way to test our research conjecture. Trees create a set of rules and tunnels for a variable to pass through to create predictions. Initially A CTree1&2 model was created, however due to strength of model, a CTree1 model will be generated because it will generate a larger number of nodes to examine. This is because a CTree1 model uses only binary partitioning.
+
+Testing and training data will also be created, this separation of data will be kept consistent throughout the entire analysis. Some data needs to be seperated like this so that the created models are fit for the general population of interest, not just the analyzed data.
+
+```{r}
+set.seed(081302)
+# Define the control method
+ctrl <- trainControl(method="cv", n=3)
+
+# center and scale numeric variables then do pca for consistency
+preProc <- c("center", "scale")
+
+# estimating the CTree1
+  m1_ctree <- train(HeartDisease ~ ., data=HDn, method="ctree", trControl = ctrl, preProcess=preProc)
+
+plot((m1_ctree$finalModel), main = "Ctree Model")
+```
+
+The CTree created nine nodes, of which seven lean in one direction more than 75% of the time (Nodes 4,6,9,10,14,15,16) and two of them do not appear better than random chance (Nodes 7,17). The tree splits observations first by maximum heart rate, then examines colored vessels in a fluoroscope for those with high heart rates. STDepression is then examined for all observations, then cholesterol, finally some remaining observations are separated by age before being placed in their respective node. This CTree gave a strong indicator of how predictions for Heart Disease are made before, continuing with other machine learning models.
+
+## Classification with Nearest Neighbor (KNN)
+
+Using the CARET package we can simplify the process of using the KNN algorithm. In machine learning, known nearest neighbors refer to a technique used in classification, where the algorithm identifies the closest data points to a given point within a known data frame. Known nearest neighbors rely on the assumption that data points with similar features tend to exhibit similar behaviors or outcomes.
+
+![](images/0_2_qzcm2gSe9l67aI.png)
+
+The first step will be calculated the starting k(number of neighbors):
+
+```{r}
+sqrt(920)/2
+```
+
+The calculation above suggests that 15 is the best starting k, so k's from 1-30, increasing by 3 will be measured.
+
+```{r}
+k_values <- data.frame(k = c(1,3,6,9,12,15,18,21,24,27,30))
+```
+
+The data set needs to be spitted into testing data and training data so that over training does not occur, 80% of the data will be studied, while the remaining 20% will be used for predictions.
+
+```{r}
+set.seed(081302)
+trainIndex <- createDataPartition(HDn$HeartDisease, p = .8, 
+                                  list = FALSE, 
+                                  times = 1)
+
+HDdf_train <- HDn[trainIndex,]
+HDdf_test <- HDn[-trainIndex,]
+```
+
+Now that the data is split we can run the KNN algorithm:
+
+```{r}
+set.seed(081302)
+ctrl <- trainControl(method="cv", n=5)
+knnFit <- train(HeartDisease ~ ., data = HDdf_train, method = "knn", 
+                trControl = ctrl, preProcess = c("range"), 
+                tuneGrid= k_values)
+
+
+# print best k
+knnFit$bestTune
+# print results for each k tested
+knnFit$results
+```
+
+The k-value which performed the best was the initially calculated k-value of 15. K=15 had an accuracy of 0.7802 and a Kappa of 0.5536. The accuracy value indicates that about 78% of the model's predictions were correct. Kappa indicates that the model performed somewhere in the middle between perfectly identifying (kappa = 1) and selecting due to random chance (kappa = 0)
+
+Now the model can examine the test data and make predictions
+
+```{r}
+# Predict on test data
+HDdf_test_pred <- predict(knnFit, newdata = HDdf_test)
+
+# Evaluate model performance in TESTING sample
+confusionMatrix(HDdf_test_pred, HDdf_test$HeartDisease)
+```
+
+The model yielded a sensitivity of about 77% and a specificity of about 80%. 77% of heart disease diagnoses were correct, and 80% of confirmations that the patient did not have heart disease were correct. With heart disease both Type 1 and Type 2 errors are very crucial. A Type 2 error (failing to identify heart disease) is occurring less than a type 1 error (falsely identifying heart disease). The argument could be made that a type-2 error is more of a health risk whereas a type-1 error is more of a financial risk (paying for useless treatments) so having more type-1 errors is optimal.
+
+### Receiver - Operator Curve
+
+The receiver - operator curve maps sensitivity and against false negativity rate (1 minus the specificity). The more area under the curve indicates a better performing model, with an area of 1 indicating perfect accuracy.
+
+```{r}
+#| results: hide
+#| warning: false
+#| echo: false
+# obtain predicted probabilities
+probs <- predict(knnFit, newdata=HDdf_test, type="prob")[,2]
+roc_obj <- roc(HDdf_test$HeartDisease, probs)
+```
+
+```{r}
+plot(roc_obj, print.thres = "best", print.thres.best.method = "closest.topleft",
+     main = "Receiver Operator Curve (ROC)", # Title
+     col = "blue", # Color of the curve
+     lwd = 2, # Line width
+     print.auc = TRUE, # Display AUC value
+     print.auc.cex = 1.5, # AUC text size
+     print.auc.offset = c(0.1, 0.1), # AUC text offset
+     print.auc.just = c("left", "top"), # AUC text justification
+     print.auc.col = "black", # AUC text color
+     print.thres.pch = 20, # Threshold point shape
+     print.thres.col = "red", # Threshold point color
+     print.thres.cex = 1.2, # Threshold point size
+     print.thres.adj = c(0.5, -0.5), # Threshold point text adjustment
+     col.thres = "red", # Threshold line color
+     print.thres.pattern = "/", # Threshold point pattern
+     print.thres.pattern.cex = 1, # Threshold point pattern size
+     xlab = "False Positive Rate (1 - Specificity)", # X-axis label
+     ylab = "True Positive Rate (Sensitivity)", # Y-axis label
+     cex.axis = 1.2, # Axis label size
+     cex.lab = 1.2, # Axis tick label size
+     cex.main = 1.5, # Title size
+     cex.sub = 1.2, # Subtitle size
+     grid = TRUE # Add grid
+     )
+legend("bottomright", legend = c("ROC Curve"), col = "blue", lty = 1, lwd = 2, cex = 1.2)
+```
+
+The Area for this model is about .846, which is the highest indicator of the success of this knn model (sensitivity was about .80, and accuracy was about .77)
+
+## Regression
+
+Regression models will be used to test the second research conjecture: the creation of a linear-probability model which will allow to predict the percent chance an individual develops heart disease(in decimal form, 100%=1,50%=.50). The CARET package will allow us to quickly create regression machine learning models which can be compared to find the best performing model for further analysis.
+
+```{r}
+highlycorr<- findCorrelation(cor(HDreg), cutoff =0.80)        
+```
+
+No variables were found to be highly correlated with each other so regression models can proceed without the worry of multicolinearity in the data frame.
+
+### Finding the Proper Model
+
+Seven types of regression models will be created and compared: 1. Basic linear regression 2. Decision Tree Regression - constructs a tree-like model by splitting the data based on various rules 3. Random Forest Regression - combines the predictions of multiple decision trees to reduce overfitting and improve accuracy. 4. Stepwise Regression - a regression method which employs both forward selection and backwards elimination of critical data points which will influence the regression. 5. Elastic Regression - an adaptable version of regression combining the "lasso" and "ridge" techniques. 6. MARS Regression Technique - a regression technique which consts of multiple piecewise functions. 7. Support Vector Machine - identifies a hyperplane with maximum margin between data points
+
+```{r}
+#| results: hide
+#| warning: false
+set.seed(081302)
+# Create data partitions
+trainIndex <- createDataPartition(HDreg$HeartDisease, p = .8, list = FALSE, times = 1)
+train_data <- HDreg[trainIndex,]
+test_data <- HDreg[-trainIndex,]
+
+# Define control method for all future regression models
+ctrl <- trainControl(method = "repeatedcv", repeats = 3)
+
+# Define tuning grids for models
+grid_rpart <- expand.grid(cp = seq(0.01, 0.5, 0.05))
+grid_rf <- expand.grid(mtry = seq(1, ncol(train_data) - 1, by = 3))
+grid_mars <- expand.grid(degree = 1:3, nprune = 1:10)
+grid_nn <- expand.grid(layer1=c(2,3), layer2=c(2,3), layer3=c(2,3))
+grid_svm <- expand.grid(sigma = c(0.01, 0.2, 0.5, 1), C = c(1, seq(from = 5, to = 15, by = 5)))
+
+# Train individual models
+models <- caretList(
+  HeartDisease ~ ., data = train_data,
+  trControl = ctrl,  # Corrected typo here
+  preProcess = c("center", "scale"),
+  metric = "Rsquared",
+  tuneList = list(
+    lm = caretModelSpec(method = "lm"),
+    tree = caretModelSpec(method = "ctree2"),
+    rf = caretModelSpec(method = "rf", tuneGrid = grid_rf),
+    steplm = caretModelSpec(method = "glmStepAIC", direction = "both"),
+    elastic = caretModelSpec(method = "glmnet", tuneLength = 10),
+    mars = caretModelSpec(method = "earth", tuneGrid = grid_mars),
+    svm = caretModelSpec(method = "svmRadial", tuneGrid = grid_svm)
+  )
+)
+```
+
+```{r}
+#| echo: false
+# Compare results of the ensemble with individual models
+# Which models predict the best?
+results <- resamples(models)
+summary(results)
+bwplot(results)
+```
+
+R\^2 will be the metric of use to compare the created regression models. On average the model that performed the best with this metric is the random forest model.
+
+### Random Forest Deep Dive
+
+![](images/1_Mb8awDiY9T6rsOjtNTRcIg.png)
+
+Random Forest Regression combines the strength of multiple decision trees to create a reliable and accurate model, making it a popular choice in various real-world applications.
+
+The created model in the caretList() function will be expanded upon below.
+
+```{r}
+#| results: hide
+#| warning: false
+#| echo: false
+set.seed(081302)
+m3_rf <-train(HeartDisease ~ ., data = train_data, method = "rf", trControl = ctrl,  tuneGrid = grid_rf)
+```
+
+```{r}
+m3_rf$bestTune
+m3_rf$results
+```
+
+The model tuned for four performed the best.
+
+```{r}
+m3_rf <- randomForest(HeartDisease ~ ., data = train_data)
+
+# Get variable importance
+var_importance <- importance(m3_rf)
+
+# Create a data frame with variable names and importance scores
+var_importance_df <- data.frame(
+  Variable = rownames(var_importance),
+  Importance = var_importance[, 1]  # Using MeanDecreaseGini
+)
+
+# Ordering the data frame by importance
+var_importance_df <- var_importance_df[order(var_importance_df$Importance, decreasing = TRUE), ]
+
+ggplot(var_importance_df, aes(x = reorder(Variable, Importance), y = Importance)) +
+  geom_bar(stat = "identity", fill = "#2E75B6") +
+  labs(x = "Predictor Variable", y = "Performance in Nodes", title = "Variable Importance Plot") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+The Variable Importance Plots generated above shows the order of importance of each variable in the forest. Variables such as cholestoral, max heart rate, and exercised induced chest pain were among the most important variables. Variables such as gender, colored vessels in a fluoroscopy, as well as hypertrophy did not appear to have much importance.
+
+## Results
+
+In conclusion, both the classification and regression models were able to predict heart disease and the chance of developing heart diseases about 50% of the time. The strongest Known-Nearest-Neighbor Model had a kappa of about .55. The fine-tuned random forest generated a mean R\^2 value of about .46. These two outcomes are very close to random chance, as a coin flip of guessing if an individual has heart disease would result in a fifty fifty chance. Literature suggests that diagnosing an individual with heart disease is difficult. This is because, heart disease symptoms are not always straightforward. While chest pain (angina) is a common sign, some people experience atypical symptoms such as shortness of breath, pain in the neck, jaw, throat, upper belly area, or back, and numbness or weakness in the legs or arms, many of these symptoms are contributed to other diseases as well. Heart disease encompasses various conditions, including coronary artery disease, cardiomyopathy, and heart failure. Each type may present differently, making it harder to pinpoint the exact cause.
+
+These factors explain why generating consistent models close to fifty percent accuracy is not as diminishing as it seems on paper. For future analysis, a larger data set would be more ideal, as machine learning usually suggests thousands of observations, and there were only 920. NA variables had to be replaced or else there would be only 268 observations to make models from. If there were variables in the dataset, such as smoking, or familial status with heart disease, that might also make classification and regression models perform stronger.
